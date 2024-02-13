@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_earthquake/models/earthquake_model.dart';
 import 'package:flutter_earthquake/utils/helper_functions.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:geocoding/geocoding.dart' as gc;
 
 class AppDataProvider with ChangeNotifier {
   final baseUrl = Uri.parse('https://earthquake.usgs.gov/fdsnws/event/1/query');
@@ -28,6 +30,14 @@ class AppDataProvider with ChangeNotifier {
   String? get currentCity => _currentCity;
   double get maxRadiusThreshold => _maxRadiusKmThreshold;
   bool get shouldUseLocation => _shouldUseLocation;
+  bool get hasDataLoaded => earthquakeModel != null;
+
+  void setOrder(String value) {
+    _orderBy = value;
+    notifyListeners();
+    _setQueryParams();
+    getEarthquakeData();
+  }
 
   void _setQueryParams() {
     queryParams['format'] = 'geojson';
@@ -57,6 +67,15 @@ class AppDataProvider with ChangeNotifier {
     getEarthquakeData();
   }
 
+  Color getAlertColor(String color) {
+    return switch (color) {
+      'green' => Colors.green,
+      'yellow' => Colors.yellow,
+      'orange' => Colors.orange,
+      _ => Colors.red,
+    };
+  }
+
   Future<void> getEarthquakeData() async {
     final uri = Uri.https(baseUrl.authority, baseUrl.path, queryParams);
     try {
@@ -70,5 +89,77 @@ class AppDataProvider with ChangeNotifier {
     } catch (error) {
       print(error);
     }
+  }
+
+  void setStartTime(String date) {
+    _startTime = date;
+    _setQueryParams();
+    notifyListeners();
+  }
+
+  void setEndTime(String date) {
+    _endTime = date;
+    _setQueryParams();
+    notifyListeners();
+  }
+
+  Future<void> setLocation(bool value) async {
+    _shouldUseLocation = value;
+    notifyListeners();
+    if (value) {
+      final position = await _determinePosition();
+      _latitude = position.latitude;
+      _longitude = position.longitude;
+      _maxRadiusKm = 500;
+      _setQueryParams();
+      getEarthquakeData();
+      await _getCurrentCity();
+    } else {
+      _latitude = 0;
+      _longitude = 0;
+      _maxRadiusKm = _maxRadiusKmThreshold;
+      _currentCity = null;
+      _setQueryParams();
+      getEarthquakeData();
+    }
+  }
+
+  Future<void> _getCurrentCity() async {
+    try {
+      final placemarkList =
+          await gc.placemarkFromCoordinates(_latitude, _longitude);
+      if (placemarkList.isNotEmpty) {
+        final placemark = placemarkList.first;
+        _currentCity = placemark.locality;
+      }
+      notifyListeners();
+    } catch (error) {
+      print(error);
+    }
+  }
+
+  Future<Position> _determinePosition() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return Future.error('Location services are disabled.');
+    }
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        return Future.error('Location permissions are denied');
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      return Future.error(
+          'Location permissions are permanently denied, we cannot request permissions.');
+    }
+
+    return await Geolocator.getCurrentPosition();
   }
 }
